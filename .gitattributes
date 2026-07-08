@@ -1,2 +1,2 @@
-MRI_Dataset.zip filter=lfs diff=lfs merge=lfs -text
+CranialMRI_ScanArchive.zip filter=lfs diff=lfs merge=lfs -text
 *.zip filter=lfs diff=lfs merge=lfs -text
