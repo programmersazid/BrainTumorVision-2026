@@ -1,2 +1,2 @@
-Brain-tumor-datasets.zip filter=lfs diff=lfs merge=lfs -text
+MRI_Dataset.zip filter=lfs diff=lfs merge=lfs -text
 *.zip filter=lfs diff=lfs merge=lfs -text
