@@ -19,31 +19,72 @@ if not os.path.exists(UPLOAD_FOLDER):
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload
 
-# Model paths
-eff_model_path = 'models/efficientnet_v2.h5'
-inception_model_path = 'models/inception_v3.h5'
+# Candidate paths for models (supports newly trained .keras models as well as legacy .h5)
+eff_model_candidates = [
+    'models/efficientnet_v2_best.keras',
+    'models/efficientnet_v2_final.keras',
+    'models/efficientnet_v2.keras',
+    'models/efficientnet_v2.h5'
+]
 
-# Load models with compile=False to avoid optimizer warnings during inference
+inception_model_candidates = [
+    'models/inception_v3_best.keras',
+    'models/inception_v3_final.keras',
+    'models/inception_v3.keras',
+    'models/inception_v3.h5'
+]
+
 eff_model = None
+eff_model_path = None
+for candidate in eff_model_candidates:
+    if os.path.exists(candidate):
+        try:
+            eff_model = load_model(candidate, compile=False)
+            eff_model_path = candidate
+            print(f"[OK] EfficientNetV2 model loaded successfully from {candidate}")
+            break
+        except Exception as e:
+            print(f"[WARNING] Failed to load {candidate}: {e}")
+
+if eff_model is None:
+    print("[WARNING] No EfficientNetV2 model found.")
+
 inception_model = None
+inception_model_path = None
+for candidate in inception_model_candidates:
+    if os.path.exists(candidate):
+        try:
+            inception_model = load_model(candidate, compile=False)
+            inception_model_path = candidate
+            print(f"[OK] InceptionV3 model loaded successfully from {candidate}")
+            break
+        except Exception as e:
+            print(f"[WARNING] Failed to load {candidate}: {e}")
 
-try:
-    if os.path.exists(eff_model_path):
-        eff_model = load_model(eff_model_path, compile=False)
-        print(f"[OK] EfficientNetV2 model loaded successfully")
-    else:
-        print(f"[WARNING] EfficientNetV2 model not found at {eff_model_path}")
-except Exception as e:
-    print(f"[ERROR] Failed to load EfficientNetV2 model: {e}")
+if inception_model is None:
+    print("[WARNING] No InceptionV3 model found.")
 
-try:
-    if os.path.exists(inception_model_path):
-        inception_model = load_model(inception_model_path, compile=False)
-        print(f"[OK] InceptionV3 model loaded successfully")
-    else:
-        print(f"[WARNING] InceptionV3 model not found at {inception_model_path}")
-except Exception as e:
-    print(f"[ERROR] Failed to load InceptionV3 model: {e}")
+
+def get_model_input_size(model, default_size=224):
+    """Dynamically determine the expected input resolution (H, W) of the model."""
+    if model is None:
+        return (default_size, default_size)
+    try:
+        shape = model.input_shape
+        if isinstance(shape, list):
+            shape = shape[0]
+        if shape and len(shape) >= 3 and shape[1] is not None and shape[2] is not None:
+            return (int(shape[1]), int(shape[2]))
+    except Exception:
+        pass
+    return (default_size, default_size)
+
+
+def prepare_image(image_path, target_size):
+    """Load and prepare image for inference with appropriate dimensions."""
+    img = load_img(image_path, target_size=target_size)
+    img_array = img_to_array(img)  # values in [0, 255]
+    return np.expand_dims(img_array, axis=0)
 
 
 def allowed_file(filename):
@@ -54,48 +95,52 @@ def allowed_file(filename):
 def predict_tumor(image_path, model_choice):
     """
     Predict brain tumor type from MRI image.
-    
-    Both models were trained with raw [0-255] pixel values:
-    - EfficientNetV2: Has built-in preprocessing in the base model
-    - InceptionV3: Has a Rescaling(1/127.5, offset=-1) layer built into the saved model
-    
-    So we pass raw [0-255] images to both models.
+    Handles dynamic input sizes per model (e.g. 300x300 for EfficientNetV2, 299x299 for InceptionV3).
     """
-    IMAGE_SIZE = 224  # Both models were trained with 224x224
-
     try:
-        img = load_img(image_path, target_size=(IMAGE_SIZE, IMAGE_SIZE))
-        img_array = img_to_array(img)  # Returns float32 array with values [0, 255]
-        img_array = np.expand_dims(img_array, axis=0)
+        eff_size = get_model_input_size(eff_model, default_size=300)
+        inc_size = get_model_input_size(inception_model, default_size=299)
     except Exception as e:
-        return f"Error loading image: {str(e)}", 0.0
+        return f"Error determining model shapes: {str(e)}", 0.0
 
-    selected_model = None
     predictions = None
 
     if model_choice == 'efficientnet':
         if eff_model is None:
             return "EfficientNetV2 model is not available", 0.0
-        selected_model = eff_model
-        predictions = selected_model.predict(img_array, verbose=0)
+        try:
+            img_array = prepare_image(image_path, eff_size)
+            predictions = eff_model.predict(img_array, verbose=0)
+        except Exception as e:
+            return f"Error during EfficientNet prediction: {str(e)}", 0.0
 
     elif model_choice == 'inception':
         if inception_model is None:
             return "InceptionV3 model is not available", 0.0
-        selected_model = inception_model
-        predictions = selected_model.predict(img_array, verbose=0)
+        try:
+            img_array = prepare_image(image_path, inc_size)
+            predictions = inception_model.predict(img_array, verbose=0)
+        except Exception as e:
+            return f"Error during Inception prediction: {str(e)}", 0.0
 
     elif model_choice == 'ensemble':
         if eff_model is None and inception_model is None:
             return "No models are available", 0.0
-        elif eff_model is not None and inception_model is not None:
-            p1 = eff_model.predict(img_array, verbose=0)
-            p2 = inception_model.predict(img_array, verbose=0)
-            predictions = (p1 + p2) / 2.0
-        else:
-            # Only one model available, use it
-            available_model = eff_model if eff_model is not None else inception_model
-            predictions = available_model.predict(img_array, verbose=0)
+        try:
+            if eff_model is not None and inception_model is not None:
+                img_eff = prepare_image(image_path, eff_size)
+                img_inc = prepare_image(image_path, inc_size)
+                p1 = eff_model.predict(img_eff, verbose=0)
+                p2 = inception_model.predict(img_inc, verbose=0)
+                predictions = (p1 + p2) / 2.0
+            elif eff_model is not None:
+                img_eff = prepare_image(image_path, eff_size)
+                predictions = eff_model.predict(img_eff, verbose=0)
+            else:
+                img_inc = prepare_image(image_path, inc_size)
+                predictions = inception_model.predict(img_inc, verbose=0)
+        except Exception as e:
+            return f"Error during Ensemble prediction: {str(e)}", 0.0
     else:
         return "Invalid model choice", 0.0
 
