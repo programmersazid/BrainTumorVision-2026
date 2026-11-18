@@ -8,3 +8,5 @@ CranialMRI_ScanArchive.zip
 *.ipynb
 Internship_Report_BrainTumorVision_Final.pdf
 .python-version
+deploy/
+

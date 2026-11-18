@@ -19,48 +19,53 @@ if not os.path.exists(UPLOAD_FOLDER):
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload
 
-# Candidate paths for models (supports newly trained .keras models as well as legacy .h5)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Candidate paths for models (supports TFLite for fast low-memory inference, as well as .keras and .h5)
 eff_model_candidates = [
+    'models/efficientnet_v2.tflite',
+    os.path.join(BASE_DIR, 'models', 'efficientnet_v2.tflite'),
     'models/efficientnet_v2_best.keras',
+    os.path.join(BASE_DIR, 'models', 'efficientnet_v2_best.keras'),
     'models/efficientnet_v2_final.keras',
-    'models/efficientnet_v2.keras',
-    'models/efficientnet_v2.h5'
+    os.path.join(BASE_DIR, 'models', 'efficientnet_v2_final.keras'),
+    'models/efficientnet_v2.h5',
+    os.path.join(BASE_DIR, 'models', 'efficientnet_v2.h5')
 ]
 
 inception_model_candidates = [
+    'models/inception_v3.tflite',
+    os.path.join(BASE_DIR, 'models', 'inception_v3.tflite'),
     'models/inception_v3_best.keras',
+    os.path.join(BASE_DIR, 'models', 'inception_v3_best.keras'),
     'models/inception_v3_final.keras',
-    'models/inception_v3.keras',
-    'models/inception_v3.h5'
+    os.path.join(BASE_DIR, 'models', 'inception_v3_final.keras'),
+    'models/inception_v3.h5',
+    os.path.join(BASE_DIR, 'models', 'inception_v3.h5')
 ]
 
-eff_model = None
-eff_model_path = None
-for candidate in eff_model_candidates:
-    if os.path.exists(candidate):
-        try:
-            eff_model = load_model(candidate, compile=False)
-            eff_model_path = candidate
-            print(f"[OK] EfficientNetV2 model loaded successfully from {candidate}")
-            break
-        except Exception as e:
-            print(f"[WARNING] Failed to load {candidate}: {e}")
+def load_ai_model(candidates, model_name):
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            try:
+                if candidate.endswith('.tflite'):
+                    interpreter = tf.lite.Interpreter(model_path=candidate)
+                    interpreter.allocate_tensors()
+                    print(f"[OK] {model_name} (TFLite) loaded successfully from {candidate}")
+                    return interpreter, candidate
+                else:
+                    m = load_model(candidate, compile=False)
+                    print(f"[OK] {model_name} (Keras) loaded successfully from {candidate}")
+                    return m, candidate
+            except Exception as e:
+                print(f"[WARNING] Failed to load {candidate}: {e}")
+    return None, None
 
+eff_model, eff_model_path = load_ai_model(eff_model_candidates, "EfficientNetV2")
 if eff_model is None:
     print("[WARNING] No EfficientNetV2 model found.")
 
-inception_model = None
-inception_model_path = None
-for candidate in inception_model_candidates:
-    if os.path.exists(candidate):
-        try:
-            inception_model = load_model(candidate, compile=False)
-            inception_model_path = candidate
-            print(f"[OK] InceptionV3 model loaded successfully from {candidate}")
-            break
-        except Exception as e:
-            print(f"[WARNING] Failed to load {candidate}: {e}")
-
+inception_model, inception_model_path = load_ai_model(inception_model_candidates, "InceptionV3")
 if inception_model is None:
     print("[WARNING] No InceptionV3 model found.")
 
@@ -69,6 +74,12 @@ def get_model_input_size(model, default_size=224):
     """Dynamically determine the expected input resolution (H, W) of the model."""
     if model is None:
         return (default_size, default_size)
+    if hasattr(model, 'get_input_details'):
+        try:
+            shape = model.get_input_details()[0]['shape']
+            return (int(shape[1]), int(shape[2]))
+        except Exception:
+            pass
     try:
         shape = model.input_shape
         if isinstance(shape, list):
@@ -78,6 +89,17 @@ def get_model_input_size(model, default_size=224):
     except Exception:
         pass
     return (default_size, default_size)
+
+
+def run_model_inference(model_obj, img_array):
+    """Unified inference helper for both Keras and TFLite models."""
+    if hasattr(model_obj, 'predict'):
+        return model_obj.predict(img_array, verbose=0)
+    input_details = model_obj.get_input_details()
+    output_details = model_obj.get_output_details()
+    model_obj.set_tensor(input_details[0]['index'], img_array.astype(np.float32))
+    model_obj.invoke()
+    return model_obj.get_tensor(output_details[0]['index'])
 
 
 def prepare_image(image_path, target_size):
@@ -110,7 +132,7 @@ def predict_tumor(image_path, model_choice):
             return "EfficientNetV2 model is not available", 0.0
         try:
             img_array = prepare_image(image_path, eff_size)
-            predictions = eff_model.predict(img_array, verbose=0)
+            predictions = run_model_inference(eff_model, img_array)
         except Exception as e:
             return f"Error during EfficientNet prediction: {str(e)}", 0.0
 
@@ -119,7 +141,7 @@ def predict_tumor(image_path, model_choice):
             return "InceptionV3 model is not available", 0.0
         try:
             img_array = prepare_image(image_path, inc_size)
-            predictions = inception_model.predict(img_array, verbose=0)
+            predictions = run_model_inference(inception_model, img_array)
         except Exception as e:
             return f"Error during Inception prediction: {str(e)}", 0.0
 
@@ -130,15 +152,15 @@ def predict_tumor(image_path, model_choice):
             if eff_model is not None and inception_model is not None:
                 img_eff = prepare_image(image_path, eff_size)
                 img_inc = prepare_image(image_path, inc_size)
-                p1 = eff_model.predict(img_eff, verbose=0)
-                p2 = inception_model.predict(img_inc, verbose=0)
+                p1 = run_model_inference(eff_model, img_eff)
+                p2 = run_model_inference(inception_model, img_inc)
                 predictions = (p1 + p2) / 2.0
             elif eff_model is not None:
                 img_eff = prepare_image(image_path, eff_size)
-                predictions = eff_model.predict(img_eff, verbose=0)
+                predictions = run_model_inference(eff_model, img_eff)
             else:
                 img_inc = prepare_image(image_path, inc_size)
-                predictions = inception_model.predict(img_inc, verbose=0)
+                predictions = run_model_inference(inception_model, img_inc)
         except Exception as e:
             return f"Error during Ensemble prediction: {str(e)}", 0.0
     else:
