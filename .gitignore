@@ -1,3 +1,10 @@
 venv/
 uploads/
 .ipynb_checkpoints/
+__pycache__/
+*.pyc
+CranialMRI_ScanArchive/
+CranialMRI_ScanArchive.zip
+*.ipynb
+Internship_Report_BrainTumorVision_Final.pdf
+.python-version

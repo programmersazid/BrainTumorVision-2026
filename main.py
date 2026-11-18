@@ -197,11 +197,12 @@ def get_uploaded_file(filename):
 
 
 if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
     print("\n" + "="*60)
     print("  Brain Tumor Detection System")
-    print("  Server starting at: http://127.0.0.1:5000")
+    print(f"  Server starting at: http://0.0.0.0:{port}")
     print("="*60)
     print(f"  EfficientNetV2: {'Loaded' if eff_model else 'Not Available'}")
     print(f"  InceptionV3:    {'Loaded' if inception_model else 'Not Available'}")
     print("="*60 + "\n")
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=port, debug=False)
